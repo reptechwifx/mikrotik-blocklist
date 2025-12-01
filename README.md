@@ -56,7 +56,7 @@ You can initialize the database using phpMyAdmin.
 ## Step-by-step Instructions
 
 1. Open  
-   **https://blocklist.wifx.net/phpmyadmin**
+   **https://service.tld/phpmyadmin**
 
 2. Log in with your MariaDB credentials (blocklist / blocklist)
 
@@ -104,14 +104,14 @@ services:
     image: phpmyadmin
     environment:
       PMA_HOST: "mariadb"
-      PMA_ABSOLUTE_URI: "https://blocklist.wifx.net/phpmyadmin/"
+      PMA_ABSOLUTE_URI: "https://serivce.tld/phpmyadmin/"
     networks:
       - blocklist
       - proxy
     labels:
       - "traefik.enable=true"
       - "traefik.http.services.${PREFIX}-phpmyadmin.loadbalancer.server.port=80"
-      - "traefik.http.routers.${PREFIX}-phpmyadmin.rule=Host(`blocklist.wifx.net`) && PathPrefix(`/phpmyadmin`)"
+      - "traefik.http.routers.${PREFIX}-phpmyadmin.rule=Host(`blocklist.service.tld`) && PathPrefix(`/phpmyadmin`)"
       - "traefik.http.routers.${PREFIX}-phpmyadmin.entrypoints=websecure"
       - "traefik.http.routers.${PREFIX}-phpmyadmin.tls=true"
 
@@ -136,7 +136,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.services.${PREFIX}.loadbalancer.server.port=80"
-      - "traefik.http.routers.${PREFIX}.rule=Host(`blocklist.wifx.net`)"
+      - "traefik.http.routers.${PREFIX}.rule=Host(`blocklist.service.tld`)"
       - "traefik.http.routers.${PREFIX}.entrypoints=websecure"
       - "traefik.http.routers.${PREFIX}.tls=true"
 ```
