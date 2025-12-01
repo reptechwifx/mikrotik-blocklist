@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>WIFX Blocklist</title>
+  <title>WIFX Mikrotik Blocklist</title>
   <style>
     body { margin:0; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:#f5f6f8; }
     header { background:#0747a6; color:#fff; padding:8px 16px; display:flex; align-items:center; }
@@ -21,22 +21,25 @@
 <body>
 <header>
   <img src="/html/logo.png" alt="WIFX">
-  <div class="title">WIFX Blocklist Service</div>
+  <div class="title">WIFX MikroTik Blocklist Service</div>
 </header>
 <main>
-  <h1>Blocklists Mikrotik</h1>
+  <h1>MikroTik Blocklists</h1>
   <p>
-    Service interne WIFX pour compiler et agréger différentes sources de blocklists
-    en fichiers <code>.rsc</code> prêts à être importés dans RouterOS.
+    Internal WIFX service that compiles and aggregates multiple blocklist sources
+    into <code>.rsc</code> files ready to be imported into RouterOS.
   </p>
 
-  <!-- La liste des liens sera injectée ici -->
+  <!-- The list of links will be injected here -->
   {{SOURCES}}
 
-  <h2>Utilisation rapide (MikroTik)</h2>
+  <h2>Quick usage (MikroTik Ros7) </h2>
   <pre><code>/disk add type=tmpfs tmpfs-max-size=10M slot=tmpfs1
 /tool fetch url="https://blocklist.wifx.net/all.rsc" dst-path="tmpfs1/blocklist.rsc"
 /import file-name="tmpfs1/blocklist.rsc"
+
+/ip firewall raw
+add action=drop chain=prerouting src-address-list=blacklist
 </code></pre>
 
 </main>
