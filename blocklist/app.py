@@ -183,7 +183,7 @@ def compile_blocklist_all() -> str:
 
     lines: List[str] = []
     lines.append("/ip firewall address-list")
-#    lines.append(f'remove [find list="{MIKROTIK_LIST_NAME}"]')
+    lines.append(f'remove [find list="{MIKROTIK_LIST_NAME}"]')
 
     # /24
     for net in sorted(final_nets24, key=lambda n: (int(n.network_address), n.prefixlen)):
