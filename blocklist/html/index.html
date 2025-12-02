@@ -34,12 +34,28 @@
   {{SOURCES}}
 
   <h2>Quick usage (MikroTik Ros7) </h2>
-  <pre><code>/disk add type=tmpfs tmpfs-max-size=10M slot=tmpfs1
-/tool fetch url="https://blocklist.wifx.net/all.rsc" dst-path="tmpfs1/blocklist.rsc"
-/import file-name="tmpfs1/blocklist.rsc"
+  <pre><code>/system script
+add dont-require-permissions=yes name=blocklist policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source=\
+    "# name of RAM disk\r\
+    \n:local ramdisk \"tmpfs1\";\r\
+    \n\r\
+    \n# Check if RAM disk exists\r\
+    \n:if ([:len [/disk find slot=\$ramdisk]] = 0) do={\r\
+    \n    :log warning \"RAM disk <\$ramdisk> missing - created...\";\r\
+    \n    /disk add type=tmpfs tmpfs-max-size=10M slot=\$ramdisk;\r\
+    \n    :delay 1s;\r\
+    \n} else={\r\
+    \n    :log info \"RAM disk <\$ramdisk> already created\";\r\
+    \n}\r\
+    \n\r\
+    \n# Download .rsc into RAM disk\r\
+    \n/tool fetch url=\"https://blocklist.wifx.net/all.rsc\" dst-path=\"\$ramdisk/blocklist.rsc\";\r\
+    \n:delay 10\r\
+    \n# Import file\r\
+    \n/import file-name=\"\$ramdisk/blocklist.rsc\";"
 
-/ip firewall raw
-add action=drop chain=prerouting src-address-list=blacklist
+/system scheduler
+add interval=1h30m name=blocklist on-event=blocklist policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=startup
 </code></pre>
 
 </main>
