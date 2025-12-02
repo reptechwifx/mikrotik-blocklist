@@ -78,6 +78,7 @@ def get_whitelist_networks() -> tuple[Set[ipaddress.IPv4Network], float | None]:
             nets = set()
         _whitelist_state["mtime"] = mtime
         _whitelist_state["nets"] = nets
+	print(f"[WHITELIST] Loaded {len(nets)} networks from {path} (mtime={mtime})")
     return _whitelist_state["nets"], _whitelist_state["mtime"]  # type: ignore[return-value]
 
 
@@ -414,9 +415,9 @@ DEFAULT_INDEX_TEMPLATE = """<!DOCTYPE html>
 def render_index_html() -> str:
     sources = get_active_sources()
     parts: List[str] = []
-    parts.append("<h2>Listes disponibles</h2>")
+    parts.append("<h2>Available lists</h2>")
     parts.append("<ul>")
-    parts.append('<li><a href="/all.rsc">all.rsc</a> – liste globale (toutes sources actives)</li>')
+    parts.append('<li><a href="/all.rsc">all.rsc</a> – Global (all sources)</li>')
 
     for src in sources:
         name = src["name"] or f"source-{src['id']}"
