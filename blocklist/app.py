@@ -78,7 +78,7 @@ def get_whitelist_networks() -> tuple[Set[ipaddress.IPv4Network], float | None]:
             nets = set()
         _whitelist_state["mtime"] = mtime
         _whitelist_state["nets"] = nets
-	print(f"[WHITELIST] Loaded {len(nets)} networks from {path} (mtime={mtime})")
+        print(f"[WHITELIST] Loaded {len(nets)} networks from {path} (mtime={mtime})")
     return _whitelist_state["nets"], _whitelist_state["mtime"]  # type: ignore[return-value]
 
 
