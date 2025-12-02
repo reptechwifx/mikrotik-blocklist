@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 COPY html ./html
+RUN mkdir -p /etc/conf
+COPY whitelist.txt /etc/conf/whitelist.txt
 
 RUN pip install --no-cache-dir -r requirements.txt
 

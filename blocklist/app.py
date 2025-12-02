@@ -27,15 +27,58 @@ GLOBAL_COMMENT = os.getenv("GLOBAL_COMMENT", "compiled-blocklist")
 AGGREGATE_THRESHOLD = int(os.getenv("AGGREGATE_THRESHOLD", "50"))
 FETCH_TIMEOUT = int(os.getenv("FETCH_TIMEOUT", "20"))
 CACHE_TTL = int(os.getenv("CACHE_TTL", "600"))  # secondes, 600 = 10 min
+WHITELIST_PATH = os.getenv("WHITELIST_PATH", "/etc/conf/whitelist.txt")
 
 # --- Cache en mémoire -------------------------------------------------------
 
 _all_cache: Dict[str, object] = {
     "ts": 0.0,
     "data": "",
+    "whitelist_mtime": None,
 }
 
 _per_source_cache: Dict[str, Dict[str, object]] = {}  # slug -> {ts, data}
+
+_whitelist_state: Dict[str, object] = {
+    "mtime": None,
+    "nets": set(),
+}
+
+
+def get_whitelist_networks() -> tuple[Set[ipaddress.IPv4Network], float | None]:
+    """Charge les réseaux IPv4 de la whitelist depuis WHITELIST_PATH.
+
+    Le fichier est rechargé automatiquement en cas de modification (mtime)."""
+    global _whitelist_state
+    path = WHITELIST_PATH
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        _whitelist_state["mtime"] = None
+        _whitelist_state["nets"] = set()
+        return _whitelist_state["nets"], _whitelist_state["mtime"]
+    mtime = st.st_mtime
+    if _whitelist_state["mtime"] != mtime:
+        nets: Set[ipaddress.IPv4Network] = set()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    try:
+                        net = ipaddress.ip_network(line, strict=False)
+                    except ValueError:
+                        # Ligne invalide, on ignore
+                        continue
+                    # On ne garde que de l'IPv4, la génération actuelle est IPv4-only
+                    if isinstance(net, ipaddress.IPv4Network):
+                        nets.add(net)
+        except OSError:
+            nets = set()
+        _whitelist_state["mtime"] = mtime
+        _whitelist_state["nets"] = nets
+    return _whitelist_state["nets"], _whitelist_state["mtime"]  # type: ignore[return-value]
 
 
 # --- Helpers généraux -------------------------------------------------------
@@ -127,6 +170,8 @@ def compile_blocklist_all() -> str:
     if not sources:
         raise HTTPException(status_code=500, detail="No active sources configured")
 
+    whitelist_nets, _ = get_whitelist_networks()
+
     all_ips: Set[ipaddress.IPv4Address] = set()
     explicit_nets24: Set[ipaddress.IPv4Network] = set()
     explicit_nets24_comment: Dict[ipaddress.IPv4Network, str] = {}
@@ -143,12 +188,18 @@ def compile_blocklist_all() -> str:
 
         if cidr_mode == "24":
             for ip in ips:
+                # IP dans la whitelist -> on ignore
+                if any(ip in net for net in whitelist_nets):
+                    continue
                 net = ipaddress.IPv4Network(f"{ip.exploded}/24", strict=False)
                 if net not in explicit_nets24:
                     explicit_nets24.add(net)
                     explicit_nets24_comment[net] = source_comment
         else:
             for ip in ips:
+                # IP dans la whitelist -> on ignore
+                if any(ip in net for net in whitelist_nets):
+                    continue
                 if ip not in all_ips:
                     all_ips.add(ip)
                     ip_first_comment.setdefault(ip, source_comment)
@@ -209,10 +260,18 @@ def compile_blocklist_all() -> str:
 
 def get_all_script_cached() -> str:
     now = time.time()
-    if not _all_cache["data"] or now - _all_cache["ts"] > CACHE_TTL:
+    # On invalide le cache si la whitelist change (mtime) ou si le TTL est dépassé
+    _, wl_mtime = get_whitelist_networks()
+    cached_mtime = _all_cache.get("whitelist_mtime")
+    if (
+        not _all_cache.get("data")
+        or now - float(_all_cache.get("ts", 0.0)) > CACHE_TTL
+        or cached_mtime != wl_mtime
+    ):
         script = compile_blocklist_all()
         _all_cache["data"] = script
         _all_cache["ts"] = now
+        _all_cache["whitelist_mtime"] = wl_mtime
     return _all_cache["data"]  # type: ignore[return-value]
 
 
@@ -225,6 +284,8 @@ def compile_blocklist_for_source(src: dict) -> str:
     cidr_mode = src.get("cidr_mode") or "32"
     source_comment = (src.get("name") or src.get("comment") or GLOBAL_COMMENT).strip() or GLOBAL_COMMENT
 
+    whitelist_nets, _ = get_whitelist_networks()
+
     text = fetch_list(url)
     ips = extract_ipv4s_from_text(text, delim)
 
@@ -233,10 +294,16 @@ def compile_blocklist_for_source(src: dict) -> str:
 
     if cidr_mode == "24":
         for ip in ips:
+            # IP dans la whitelist -> on ignore
+            if any(ip in net for net in whitelist_nets):
+                continue
             net = ipaddress.IPv4Network(f"{ip.exploded}/24", strict=False)
             explicit_nets24.add(net)
     else:
         for ip in ips:
+            # IP dans la whitelist -> on ignore
+            if any(ip in net for net in whitelist_nets):
+                continue
             all_ips.add(ip)
 
     per_net24: Dict[ipaddress.IPv4Network, Set[ipaddress.IPv4Address]] = defaultdict(set)
@@ -285,11 +352,16 @@ def compile_blocklist_for_source(src: dict) -> str:
 def get_source_script_cached(src: dict) -> str:
     slug = slugify(src["name"] or f"source-{src['id']}")
     now = time.time()
+    _, wl_mtime = get_whitelist_networks()
     entry = _per_source_cache.get(slug)
 
-    if not entry or now - entry["ts"] > CACHE_TTL:
+    if (
+        not entry
+        or now - float(entry.get("ts", 0.0)) > CACHE_TTL
+        or entry.get("whitelist_mtime") != wl_mtime
+    ):
         script = compile_blocklist_for_source(src)
-        _per_source_cache[slug] = {"ts": now, "data": script}
+        _per_source_cache[slug] = {"ts": now, "data": script, "whitelist_mtime": wl_mtime}
         return script
     return entry["data"]  # type: ignore[return-value]
 
@@ -326,7 +398,7 @@ DEFAULT_INDEX_TEMPLATE = """<!DOCTYPE html>
 </header>
 <main>
   <h1>Blocklists Mikrotik</h1>
-  <p>Cette page fournit des listes <code>.rsc</code> prêtes à être importées dans RouterOS.</p>
+  <p>List of blocklists <code>.rsc</code> ready for RouterOS.</p>
 
   {{SOURCES}}
 
