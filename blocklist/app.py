@@ -71,9 +71,18 @@ def get_active_sources():
 
 
 def fetch_list(url: str) -> str:
-    resp = requests.get(url, timeout=FETCH_TIMEOUT)
-    resp.raise_for_status()
-    return resp.text
+    """
+    Télécharge une liste avec timeout court (500 ms).
+    En cas de timeout ou erreur HTTP, retourne une chaîne vide.
+    La compilation continue alors normalement avec les autres sources.
+    """
+    try:
+        resp = requests.get(url, timeout=0.5)  # 500 ms
+        resp.raise_for_status()
+        return resp.text
+    except Exception as e:
+        print(f"[WARN] Source skipped (timeout or error): {url} -> {e}")
+        return ""
 
 
 def extract_ipv4s_from_text(text: str, delimiter: str | None) -> List[ipaddress.IPv4Address]:
