@@ -179,7 +179,7 @@ def parse_timeout(raw: str | None) -> str:
 
 def make_error_script() -> str:
     # Renvoyé dans tous les cas d'erreur côté /custom.rsc ou /all.rsc
-    return ':log info "Custom blocklist link is wrong, please check online !"' + "\n"
+    return ':log error "Custom blocklist link is wrong, please check online !"' + "\n"
 
 
 def compile_custom_blocklist(
