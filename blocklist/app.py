@@ -398,7 +398,7 @@ DEFAULT_INDEX_TEMPLATE = """<!DOCTYPE html>
 </header>
 <main>
   <h1>Blocklists Mikrotik</h1>
-  <p>List of blocklists <code>.rsc</code> ready for RouterOS.</p>
+  <p>List of <code>.rsc</code> prêtes à être importées dansready for RouterOS.</p>
 
   {{SOURCES}}
 
