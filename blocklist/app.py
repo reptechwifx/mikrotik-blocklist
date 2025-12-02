@@ -3,11 +3,11 @@ import re
 import ipaddress
 import time
 from collections import defaultdict
-from typing import Dict, Set, List
+from typing import Dict, Set, List, Tuple
 
 import requests
 import mysql.connector
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Query
 from fastapi.responses import PlainTextResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -26,63 +26,14 @@ GLOBAL_COMMENT = os.getenv("GLOBAL_COMMENT", "compiled-blocklist")
 
 AGGREGATE_THRESHOLD = int(os.getenv("AGGREGATE_THRESHOLD", "50"))
 FETCH_TIMEOUT = int(os.getenv("FETCH_TIMEOUT", "20"))
-CACHE_TTL = int(os.getenv("CACHE_TTL", "600"))  # secondes, 600 = 10 min
-WHITELIST_PATH = os.getenv("WHITELIST_PATH", "/etc/conf/whitelist.txt")
+CACHE_TTL = int(os.getenv("CACHE_TTL", "600"))  # seconds, 600 = 10 min
 
 # --- Cache en mémoire -------------------------------------------------------
 
-_all_cache: Dict[str, object] = {
-    "ts": 0.0,
-    "data": "",
-    "whitelist_mtime": None,
-}
-
-_per_source_cache: Dict[str, Dict[str, object]] = {}  # slug -> {ts, data}
-
-_whitelist_state: Dict[str, object] = {
-    "mtime": None,
-    "nets": set(),
-}
-
-
-def get_whitelist_networks() -> tuple[Set[ipaddress.IPv4Network], float | None]:
-    """Charge les réseaux IPv4 de la whitelist depuis WHITELIST_PATH.
-
-    Le fichier est rechargé automatiquement en cas de modification (mtime)."""
-    global _whitelist_state
-    path = WHITELIST_PATH
-    try:
-        st = os.stat(path)
-    except FileNotFoundError:
-        _whitelist_state["mtime"] = None
-        _whitelist_state["nets"] = set()
-        return _whitelist_state["nets"], _whitelist_state["mtime"]
-    mtime = st.st_mtime
-    if _whitelist_state["mtime"] != mtime:
-        nets: Set[ipaddress.IPv4Network] = set()
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    try:
-                        net = ipaddress.ip_network(line, strict=False)
-                    except ValueError:
-                        # Ligne invalide, on ignore
-                        continue
-                    # On ne garde que de l'IPv4, la génération actuelle est IPv4-only
-                    if isinstance(net, ipaddress.IPv4Network):
-                        nets.add(net)
-        except OSError:
-            nets = set()
-        _whitelist_state["mtime"] = mtime
-        _whitelist_state["nets"] = nets
-        print(f"[WHITELIST] Loaded {len(nets)} networks from {path} (mtime={mtime})")
-    return _whitelist_state["nets"], _whitelist_state["mtime"]  # type: ignore[return-value]
-
+_custom_cache: Dict[Tuple[str, str, Tuple[int, ...], Tuple[str, ...]], Dict[str, object]] = {}
 
 # --- Helpers généraux -------------------------------------------------------
+
 
 def slugify(name: str) -> str:
     s = name.strip().lower()
@@ -163,22 +114,105 @@ def extract_ipv4s_from_text(text: str, delimiter: str | None) -> List[ipaddress.
     return ips
 
 
-# --- Compilation globale (toutes sources actives) ---------------------------
+def normalize_list_name(raw: str | None) -> str:
+    """Nettoie le nom de la liste Mikrotik, avec fallback sur MIKROTIK_LIST_NAME."""
+    if not raw:
+        return MIKROTIK_LIST_NAME
+    raw = raw.strip()
+    if not raw:
+        return MIKROTIK_LIST_NAME
+    # Autorise lettres, chiffres, -, _
+    cleaned = re.sub(r"[^A-Za-z0-9_\-]", "_", raw)
+    if not cleaned:
+        return MIKROTIK_LIST_NAME
+    # Mikrotik accepte des noms assez longs, on tronque par sécurité
+    return cleaned[:63]
 
-def compile_blocklist_all() -> str:
-    """Compile une liste globale avec déduplication entre toutes les sources."""
+
+def parse_timeout(raw: str | None) -> str:
+    """
+    Parse un timeout Mikrotik au format HH:MM:SS ou Xd HH:MM:SS.
+    Limite à 3 jours max.
+    Retourne une chaîne normalisée (HH:MM:SS ou Xd HH:MM:SS).
+    """
+    DEFAULT_TIMEOUT = "02:00:00"
+    MAX_SECONDS = 3 * 24 * 3600
+
+    if raw is None or not raw.strip():
+        return DEFAULT_TIMEOUT
+
+    txt = raw.strip()
+
+    days = 0
+    h = m = s = 0
+
+    # Format avec jours: "Xd HH:MM:SS" ou "XdHH:MM:SS"
+    mobj = re.match(r"^(\d+)d\s*(\d{1,2}):(\d{2}):(\d{2})$", txt)
+    if mobj:
+        days = int(mobj.group(1))
+        h = int(mobj.group(2))
+        m = int(mobj.group(3))
+        s = int(mobj.group(4))
+    else:
+        # Format simple HH:MM:SS
+        mobj = re.match(r"^(\d{1,2}):(\d{2}):(\d{2})$", txt)
+        if not mobj:
+            raise ValueError("Invalid timeout format")
+        h = int(mobj.group(1))
+        m = int(mobj.group(2))
+        s = int(mobj.group(3))
+
+    total = days * 86400 + h * 3600 + m * 60 + s
+    if total <= 0 or total > MAX_SECONDS:
+        raise ValueError("Timeout exceeds maximum (3d) or is zero")
+
+    # Normalisation
+    days, rem = divmod(total, 86400)
+    h, rem = divmod(rem, 3600)
+    m, s = divmod(rem, 60)
+
+    if days:
+        return f"{days}d {h:02d}:{m:02d}:{s:02d}"
+    else:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def make_error_script() -> str:
+    # Renvoyé dans tous les cas d'erreur côté /custom.rsc ou /all.rsc
+    return ':log info "Custom blocklist link is wrong, please check online !"' + "\n"
+
+
+def compile_custom_blocklist(
+    list_name: str,
+    timeout: str,
+    source_ids: List[int],
+    whitelist_nets: List[ipaddress.IPv4Network],
+) -> str:
+    """
+    Compile une blocklist personnalisée (IPv4 only) pour les sources sélectionnées.
+    Agrégation en /24 avec seuil AGGREGATE_THRESHOLD.
+    """
+    if not source_ids:
+        raise ValueError("No sources selected")
+
     sources = get_active_sources()
-    if not sources:
-        raise HTTPException(status_code=500, detail="No active sources configured")
+    # Filtrer les sources par ID
+    src_by_id = {int(s["id"]): s for s in sources}
+    selected = []
+    for sid in source_ids:
+        if sid in src_by_id:
+            selected.append(src_by_id[sid])
+    if not selected:
+        raise ValueError("Unknown sources")
 
-    whitelist_nets, _ = get_whitelist_networks()
+    wl_nets = whitelist_nets or []
 
     all_ips: Set[ipaddress.IPv4Address] = set()
     explicit_nets24: Set[ipaddress.IPv4Network] = set()
     explicit_nets24_comment: Dict[ipaddress.IPv4Network, str] = {}
     ip_first_comment: Dict[ipaddress.IPv4Address, str] = {}
 
-    for src in sources:
+    for src in selected:
         url = src["url"]
         delim = src.get("delimiter") or "\n"
         cidr_mode = src.get("cidr_mode") or "32"
@@ -189,8 +223,7 @@ def compile_blocklist_all() -> str:
 
         if cidr_mode == "24":
             for ip in ips:
-                # IP dans la whitelist -> on ignore
-                if any(ip in net for net in whitelist_nets):
+                if any(ip in net for net in wl_nets):
                     continue
                 net = ipaddress.IPv4Network(f"{ip.exploded}/24", strict=False)
                 if net not in explicit_nets24:
@@ -198,8 +231,7 @@ def compile_blocklist_all() -> str:
                     explicit_nets24_comment[net] = source_comment
         else:
             for ip in ips:
-                # IP dans la whitelist -> on ignore
-                if any(ip in net for net in whitelist_nets):
+                if any(ip in net for net in wl_nets):
                     continue
                 if ip not in all_ips:
                     all_ips.add(ip)
@@ -215,11 +247,11 @@ def compile_blocklist_all() -> str:
     aggregated_ips: Set[ipaddress.IPv4Address] = set()
     aggregated_nets24_comment: Dict[ipaddress.IPv4Network, str] = {}
 
-    for net, ips in per_net24.items():
-        if len(ips) >= AGGREGATE_THRESHOLD:
+    for net, ips_set in per_net24.items():
+        if len(ips_set) >= AGGREGATE_THRESHOLD:
             aggregated_nets24.add(net)
-            aggregated_ips.update(ips)
-            first_ip = next(iter(ips))
+            aggregated_ips.update(ips_set)
+            first_ip = next(iter(ips_set))
             aggregated_nets24_comment[net] = ip_first_comment.get(first_ip, GLOBAL_COMMENT)
 
     remaining_ips: Set[ipaddress.IPv4Address] = set()
@@ -235,7 +267,7 @@ def compile_blocklist_all() -> str:
 
     lines: List[str] = []
     lines.append("/ip firewall address-list")
-    lines.append(f'remove [find list="{MIKROTIK_LIST_NAME}"]')
+    lines.append(f'remove [find list="{list_name}"]')
 
     # /24
     for net in sorted(final_nets24, key=lambda n: (int(n.network_address), n.prefixlen)):
@@ -244,127 +276,41 @@ def compile_blocklist_all() -> str:
         else:
             comment = aggregated_nets24_comment.get(net, GLOBAL_COMMENT)
         lines.append(
-            f'add list={MIKROTIK_LIST_NAME} address={net.with_prefixlen} '
-            f'comment="{comment}" timeout=02:00:00'
+            f'add list={list_name} address={net.with_prefixlen} '
+            f'comment="{comment}" timeout={timeout}'
         )
 
     # /32
     for ip in sorted(remaining_ips, key=int):
         comment = ip_first_comment.get(ip, GLOBAL_COMMENT)
         lines.append(
-            f'add list={MIKROTIK_LIST_NAME} address={ip.exploded} '
-            f'comment="{comment}" timeout=02:00:00'
+            f'add list={list_name} address={ip.exploded} '
+            f'comment="{comment}" timeout={timeout}'
         )
 
     return "\n".join(lines) + "\n"
 
 
-def get_all_script_cached() -> str:
+def get_custom_script_cached(
+    list_name: str,
+    timeout: str,
+    source_ids: List[int],
+    whitelist_nets: List[ipaddress.IPv4Network],
+) -> str:
+    key = (
+        list_name,
+        timeout,
+        tuple(sorted(source_ids)),
+        tuple(sorted(str(net) for net in whitelist_nets)),
+    )
     now = time.time()
-    # On invalide le cache si la whitelist change (mtime) ou si le TTL est dépassé
-    _, wl_mtime = get_whitelist_networks()
-    cached_mtime = _all_cache.get("whitelist_mtime")
-    if (
-        not _all_cache.get("data")
-        or now - float(_all_cache.get("ts", 0.0)) > CACHE_TTL
-        or cached_mtime != wl_mtime
-    ):
-        script = compile_blocklist_all()
-        _all_cache["data"] = script
-        _all_cache["ts"] = now
-        _all_cache["whitelist_mtime"] = wl_mtime
-    return _all_cache["data"]  # type: ignore[return-value]
+    entry = _custom_cache.get(key)
+    if entry and now - float(entry.get("ts", 0.0)) <= CACHE_TTL:
+        return entry["data"]  # type: ignore[return-value]
 
-
-# --- Compilation par source individuelle ------------------------------------
-
-def compile_blocklist_for_source(src: dict) -> str:
-    """Compile une liste pour UNE seule source (dédup + agrégation dans cette source)."""
-    url = src["url"]
-    delim = src.get("delimiter") or "\n"
-    cidr_mode = src.get("cidr_mode") or "32"
-    source_comment = (src.get("name") or src.get("comment") or GLOBAL_COMMENT).strip() or GLOBAL_COMMENT
-
-    whitelist_nets, _ = get_whitelist_networks()
-
-    text = fetch_list(url)
-    ips = extract_ipv4s_from_text(text, delim)
-
-    all_ips: Set[ipaddress.IPv4Address] = set()
-    explicit_nets24: Set[ipaddress.IPv4Network] = set()
-
-    if cidr_mode == "24":
-        for ip in ips:
-            # IP dans la whitelist -> on ignore
-            if any(ip in net for net in whitelist_nets):
-                continue
-            net = ipaddress.IPv4Network(f"{ip.exploded}/24", strict=False)
-            explicit_nets24.add(net)
-    else:
-        for ip in ips:
-            # IP dans la whitelist -> on ignore
-            if any(ip in net for net in whitelist_nets):
-                continue
-            all_ips.add(ip)
-
-    per_net24: Dict[ipaddress.IPv4Network, Set[ipaddress.IPv4Address]] = defaultdict(set)
-    for ip in all_ips:
-        net24 = ipaddress.IPv4Network(f"{ip.exploded}/24", strict=False)
-        per_net24[net24].add(ip)
-
-    aggregated_nets24: Set[ipaddress.IPv4Network] = set()
-    aggregated_ips: Set[ipaddress.IPv4Address] = set()
-
-    for net, ips_set in per_net24.items():
-        if len(ips_set) >= AGGREGATE_THRESHOLD:
-            aggregated_nets24.add(net)
-            aggregated_ips.update(ips_set)
-
-    remaining_ips: Set[ipaddress.IPv4Address] = set()
-    for ip in all_ips:
-        ip_net24 = ipaddress.IPv4Network(f"{ip.exploded}/24", strict=False)
-        if ip_net24 in explicit_nets24:
-            continue
-        if ip_net24 in aggregated_nets24:
-            continue
-        remaining_ips.add(ip)
-
-    final_nets24: Set[ipaddress.IPv4Network] = set(explicit_nets24) | set(aggregated_nets24)
-
-    lines: List[str] = []
-    lines.append("/ip firewall address-list")
-    lines.append(f'remove [find list="{MIKROTIK_LIST_NAME}"]')
-
-    for net in sorted(final_nets24, key=lambda n: (int(n.network_address), n.prefixlen)):
-        lines.append(
-            f'add list={MIKROTIK_LIST_NAME} address={net.with_prefixlen} '
-            f'comment="{source_comment}" timeout=02:00:00'
-        )
-
-    for ip in sorted(remaining_ips, key=int):
-        lines.append(
-            f'add list={MIKROTIK_LIST_NAME} address={ip.exploded} '
-            f'comment="{source_comment}" timeout=02:00:00'
-        )
-
-    return "\n".join(lines) + "\n"
-
-
-def get_source_script_cached(src: dict) -> str:
-    slug = slugify(src["name"] or f"source-{src['id']}")
-    now = time.time()
-    _, wl_mtime = get_whitelist_networks()
-    entry = _per_source_cache.get(slug)
-
-    if (
-        not entry
-        or now - float(entry.get("ts", 0.0)) > CACHE_TTL
-        or entry.get("whitelist_mtime") != wl_mtime
-    ):
-        script = compile_blocklist_for_source(src)
-        _per_source_cache[slug] = {"ts": now, "data": script, "whitelist_mtime": wl_mtime}
-        return script
-    return entry["data"]  # type: ignore[return-value]
+    script = compile_custom_blocklist(list_name, timeout, source_ids, whitelist_nets)
+    _custom_cache[key] = {"ts": now, "data": script}
+    return script
 
 
 # --- HTML / static ----------------------------------------------------------
@@ -373,40 +319,18 @@ def get_source_script_cached(src: dict) -> str:
 app.mount("/html", StaticFiles(directory="html"), name="html")
 
 DEFAULT_INDEX_TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
+<html lang=\\"en\\">
 <head>
-  <meta charset="utf-8">
+  <meta charset=\\"utf-8\\">
   <title>WIFX Blocklist</title>
-  <style>
-    body { margin:0; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:#f5f6f8; }
-    header { background:#0747a6; color:#fff; padding:8px 16px; display:flex; align-items:center; }
-    header img { height:28px; margin-right:12px; }
-    header .title { font-size:18px; font-weight:600; }
-    main { max-width:900px; margin:24px auto; background:#fff; padding:24px 28px; border-radius:6px; box-shadow:0 1px 3px rgba(9,30,66,0.13); }
-    h1 { margin-top:0; font-size:22px; color:#172b4d; }
-    p { color:#42526e; }
-    ul { padding-left:20px; }
-    li { margin:4px 0; }
-    code { background:#f4f5f7; padding:2px 4px; border-radius:3px; font-size:90%; }
-    footer { text-align:center; padding:16px; font-size:12px; color:#6b778c; }
-    footer a { color:#0747a6; text-decoration:none; }
-  </style>
 </head>
 <body>
 <header>
-  <img src="/html/logo.png" alt="WIFX">
-  <div class="title">WIFX Blocklist Service</div>
+  <h1>WIFX Blocklist</h1>
 </header>
 <main>
-  <h1>Blocklists Mikrotik</h1>
-  <p>List of <code>.rsc</code> prêtes à être importées dansready for RouterOS.</p>
-
   {{SOURCES}}
-
 </main>
-<footer>
-  &copy; WIFX SA - <a href="https://www.wifx.net" target="_blank" rel="noopener">www.wifx.net</a>
-</footer>
 </body>
 </html>
 """
@@ -415,19 +339,38 @@ DEFAULT_INDEX_TEMPLATE = """<!DOCTYPE html>
 def render_index_html() -> str:
     sources = get_active_sources()
     parts: List[str] = []
-    parts.append("<h2>Available lists</h2>")
+
+    parts.append("<h2>Available blocklists</h2>")
+    parts.append("<p>Select the sources you want to include, then generate your custom URL.</p>")
+    parts.append('<section class="builder">')
+    parts.append('<div class="builder-form">')
+    parts.append('<label>Address-list name (MikroTik): <input id="list-name" type="text" placeholder="blacklist"></label><br>')
+    parts.append('<label>Timeout (HH:MM:SS or Xd HH:MM:SS, max 3d): <input id="timeout" type="text" placeholder="02:00:00"></label><br>')
+    parts.append('<label>Whitelist CIDR (one per line):<br><textarea id="whitelist" rows="4" cols="40" placeholder="203.0.113.0/24\n198.51.100.0/23"></textarea></label>')
+    parts.append("</div>")
+    parts.append('<div class="builder-sources">')
+    parts.append("<h3>Sources</h3>")
     parts.append("<ul>")
-    parts.append('<li><a href="/all.rsc">all.rsc</a> – Global (all sources)</li>')
-
     for src in sources:
-        name = src["name"] or f"source-{src['id']}"
-        slug = slugify(name)
+        sid = int(src["id"])
+        name = src["name"] or f"source-{sid}"
+        url = src["url"]
         parts.append(
-            f'<li><a href="/all-{slug}.rsc">all-{slug}.rsc</a> – {name} '
-            f'(<code>{src["url"]}</code>)</li>'
+            f'<li><label><input type="checkbox" class="src-checkbox" value="{sid}" /> '
+            f"{name}</label><br><code>{url}</code></li>"
         )
-
     parts.append("</ul>")
+    parts.append("</div>")
+    parts.append('<div class="builder-actions">')
+    parts.append('<button type="button" id="generate-btn">Generate custom URL</button>')
+    parts.append("</div>")
+    parts.append('<div class="builder-output">')
+    parts.append('<h3>Generated URL</h3>')
+    parts.append('<input type="text" id="generated-url" readonly style="width:100%;" placeholder="Will appear here..." />')
+    parts.append('<button type="button" id="copy-url">Copy URL</button>')
+    parts.append("</div>")
+    parts.append("</section>")
+
     sources_html = "\n".join(parts)
 
     template = DEFAULT_INDEX_TEMPLATE
@@ -438,10 +381,12 @@ def render_index_html() -> str:
     except FileNotFoundError:
         pass
 
+    # On injecte le bloc HTML (checkboxes + builder)
     return template.replace("{{SOURCES}}", sources_html)
 
 
 # --- Endpoints --------------------------------------------------------------
+
 
 @app.get("/health", response_class=PlainTextResponse)
 def health():
@@ -454,32 +399,63 @@ def index():
     return HTMLResponse(content=html)
 
 
+def _parse_whitelist_params(wl_params: List[str]) -> List[ipaddress.IPv4Network]:
+    nets: List[ipaddress.IPv4Network] = []
+    for entry in wl_params:
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            net = ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            raise ValueError(f"Invalid whitelist CIDR: {entry}")
+        if not isinstance(net, ipaddress.IPv4Network):
+            raise ValueError(f"Whitelist IPv6 not supported: {entry}")
+        nets.append(net)
+    return nets
+
+
+@app.get("/custom.rsc", response_class=PlainTextResponse)
+def custom_rsc(
+    list_param: str | None = Query(None, alias="list"),
+    timeout_param: str | None = Query(None, alias="timeout"),
+    src: List[int] = Query([], alias="src"),
+    wl: List[str] = Query([], alias="wl"),
+):
+    try:
+        list_name = normalize_list_name(list_param)
+        timeout = parse_timeout(timeout_param)
+        if not src:
+            raise ValueError("No sources selected")
+        wl_nets = _parse_whitelist_params(wl)
+        script = get_custom_script_cached(list_name, timeout, src, wl_nets)
+        return PlainTextResponse(content=script, media_type="text/plain; charset=utf-8")
+    except Exception as e:
+        # Log côté serveur pour debug
+        print(f"[custom.rsc] error: {e}")
+        err_script = make_error_script()
+        return PlainTextResponse(content=err_script, media_type="text/plain; charset=utf-8")
+
+
 @app.get("/mikrotik.rsc", response_class=PlainTextResponse)
 def mikrotik_rsc():
     """Ancien endpoint, alias de /all.rsc."""
-    script = get_all_script_cached()
-    return PlainTextResponse(content=script, media_type="text/plain; charset=utf-8")
+    return all_rsc()
 
 
 @app.get("/all.rsc", response_class=PlainTextResponse)
 def all_rsc():
-    """Liste globale compilée (toutes sources actives)."""
-    script = get_all_script_cached()
-    return PlainTextResponse(content=script, media_type="text/plain; charset=utf-8")
-
-
-@app.get("/all-{slug}.rsc", response_class=PlainTextResponse)
-def per_source_rsc(slug: str):
-    """Liste compilée pour une source unique, identifiée par son slug basé sur name."""
-    sources = get_active_sources()
-    src_match = None
-    for src in sources:
-        if slugify(src["name"] or f"source-{src['id']}") == slug.lower():
-            src_match = src
-            break
-
-    if not src_match:
-        raise HTTPException(status_code=404, detail="Unknown source")
-
-    script = get_source_script_cached(src_match)
-    return PlainTextResponse(content=script, media_type="text/plain; charset=utf-8")
+    """Liste globale compilée (toutes sources actives), pour rétro-compat."""
+    try:
+        sources = get_active_sources()
+        if not sources:
+            raise ValueError("No active sources configured")
+        all_ids = [int(s["id"]) for s in sources]
+        list_name = MIKROTIK_LIST_NAME
+        timeout = parse_timeout(None)  # timeout par défaut (02:00:00)
+        script = get_custom_script_cached(list_name, timeout, all_ids, [])
+        return PlainTextResponse(content=script, media_type="text/plain; charset=utf-8")
+    except Exception as e:
+        print(f"[all.rsc] error: {e}")
+        err_script = make_error_script()
+        return PlainTextResponse(content=err_script, media_type="text/plain; charset=utf-8")
