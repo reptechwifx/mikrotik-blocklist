@@ -1,0 +1,28 @@
+
+---
+
+## Nouveau `docker-compose.yaml` d’exemple
+
+Voici un exemple “générique” pour le README, sans Traefik ni Swarm, juste pour montrer l’utilisation de l’image et du volume :
+
+```yaml
+version: "3.8"
+
+services:
+  blocklist:
+    image: reptechwifx/mikrotik-blocklist:latest
+    container_name: mikrotik-blocklist
+    restart: unless-stopped
+
+    environment:
+      MIKROTIK_LIST_NAME: "blacklist"
+      GLOBAL_COMMENT: "compiled-blocklist"
+      AGGREGATE_THRESHOLD: "50"
+      CACHE_TTL: "600"
+      BLOCKLIST_CONF_DIR: "/app/conf"
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - ./conf:/app/conf

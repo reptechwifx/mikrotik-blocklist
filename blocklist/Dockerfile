@@ -1,24 +1,20 @@
 FROM python:3.12-slim
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
-
 WORKDIR /app
 
-# Dépendances système minimales
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-COPY html ./html
-RUN mkdir -p /etc/conf
-COPY whitelist.txt /etc/conf/whitelist.txt
-
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY app.py ./app.py
+COPY html ./html
+COPY conf-dist ./conf-dist
+COPY entrypoint.sh /entrypoint.sh
 
-EXPOSE 80
+RUN chmod +x /entrypoint.sh
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "80"]
+ENV BLOCKLIST_CONF_DIR=/app/conf
+
+EXPOSE 8000
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

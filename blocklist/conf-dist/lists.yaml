@@ -1,0 +1,18 @@
+sources:
+  - id: 1
+    name: "DShield"
+    url: "https://www.dshield.org/block.txt"
+    is_active: true
+    delimiter: "\t"
+    cidr_mode: "24"
+    timeout_hours: 2
+    comment: "DShield"
+
+  - id: 2
+    name: "BlockList.de"
+    url: "https://lists.blocklist.de/lists/all.txt"
+    is_active: true
+    delimiter: "\n"
+    cidr_mode: "auto"
+    timeout_hours: 2
+    comment: "BlockList.de"
