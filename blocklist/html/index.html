@@ -72,7 +72,7 @@ add dont-require-permissions=yes name=blocklist policy=ftp,reboot,read,write,pol
     \n}\r\
     \n\r\
     \n# Download .rsc into RAM disk\r\
-    \n/tool fetch url=\"https://blocklist.wifx.net/all.rsc\" dst-path=\"\$ramdisk/blocklist.rsc\";\r\
+    \n/tool fetch url=\"__BLOCKLIST_DEFAULT_URL__\" dst-path=\"\$ramdisk/blocklist.rsc\";\r\
     \n:delay 10\r\
     \n# Import file\r\
     \n/import file-name=\"\$ramdisk/blocklist.rsc\";"
@@ -92,14 +92,20 @@ add action=drop chain=prerouting src-address-list=blacklist
 </footer>
 <script>
 (function() {
-  const DEFAULT_URL = "https://blocklist.wifx.net/all.rsc";
+  const PLACEHOLDER_URL = "__BLOCKLIST_DEFAULT_URL__";
 
   function getOrigin() {
     try {
-      return window.location.origin || "https://blocklist.wifx.net";
+      return window.location.origin;
     } catch (e) {
-      return "https://blocklist.wifx.net";
+      return "";
     }
+  }
+
+  function getDefaultUrl() {
+    const origin = getOrigin();
+    if (!origin) return "/all.rsc";
+    return origin + "/all.rsc";
   }
 
   function buildCustomUrl() {
@@ -110,6 +116,10 @@ add action=drop chain=prerouting src-address-list=blacklist
     const urlOutput = document.getElementById("generated-url");
 
     if (!urlOutput) return null;
+    if (!origin) {
+      alert("Unable to detect page origin.");
+      return null;
+    }
 
     const listName = (listInput && listInput.value.trim()) || "";
     const timeout = (timeoutInput && timeoutInput.value.trim()) || "";
@@ -156,22 +166,27 @@ add action=drop chain=prerouting src-address-list=blacklist
     const copyBtn = document.getElementById("copy-url");
     const urlOutput = document.getElementById("generated-url");
     const scriptCode = document.getElementById("mikrotik-script");
+    const listInput = document.getElementById("list-name");
 
-    if (!generateBtn || !copyBtn || !urlOutput || !scriptCode) return;
+    if (!scriptCode) return;
 
+    // Script de base présent dans le HTML
     const originalScript = scriptCode.textContent;
 
-    function updateQuickUsage(url) {
-      if (!url) return;
+    function currentListName() {
+      const v = listInput && listInput.value.trim();
+      return v || "blacklist";
+    }
 
-      // Toujours repartir du script original pour éviter les remplacements successifs
-      let updated = originalScript.replace(DEFAULT_URL, url);
+    function applyScriptTemplate(url, listName) {
+      let updated = originalScript;
+
+      // Injecte l'URL réelle à la place du placeholder
+      if (url) {
+        updated = updated.replace(PLACEHOLDER_URL, url);
+      }
 
       // Met à jour automatiquement src-address-list=<list-name>
-      const listInput = document.getElementById("list-name");
-      const listNameRaw = listInput && listInput.value.trim();
-      const listName = listNameRaw || "blacklist";
-
       updated = updated.replace(/src-address-list=[A-Za-z0-9_\-]+/g,
         "src-address-list=" + listName
       );
@@ -179,10 +194,16 @@ add action=drop chain=prerouting src-address-list=blacklist
       scriptCode.textContent = updated;
     }
 
+    // Initialisation du script avec l'URL par défaut (basée sur l'origin)
+    const defaultUrl = getDefaultUrl();
+    applyScriptTemplate(defaultUrl, "blacklist");
+
+    if (!generateBtn || !copyBtn || !urlOutput) return;
+
     generateBtn.addEventListener("click", function() {
       const url = buildCustomUrl();
       if (url) {
-        updateQuickUsage(url);
+        applyScriptTemplate(url, currentListName());
       }
     });
 
