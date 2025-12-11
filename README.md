@@ -10,6 +10,10 @@ The generator is designed to:
 
 ---
 
+## Testing
+
+https://blocklist.wifx.net
+
 ## Configuration
 
 The service uses a configuration directory mounted as a volume inside the container.
