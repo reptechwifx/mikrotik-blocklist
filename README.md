@@ -84,13 +84,13 @@ Rules:
 
 ## Environment variables
 
-| Variable | Description | Default |
-|---------|-------------|---------|
-| `MIKROTIK_LIST_NAME` | Name of generated address-list | blacklist |
-| `GLOBAL_COMMENT` | Default comment used in `/add` entries | compiled-blocklist |
-| `AGGREGATE_THRESHOLD` | /24 aggregation threshold | 50 |
-| `CACHE_TTL` | Cache duration for compiled scripts (sec) | 600 |
-| `BLOCKLIST_CONF_DIR` | Directory containing lists.yaml & whitelist.yaml | /app/conf |
+| Variable | Default | Description |
+|---------|----------|-------------|
+| `MIKROTIK_LIST_NAME` | `blacklist` | Default MikroTik address-list name used when no `list=` parameter is provided in `/custom.rsc` or `/all.rsc`. |
+| `GLOBAL_COMMENT` | `compiled-blocklist` | Comment applied when no source-specific comment is found. |
+| `AGGREGATE_THRESHOLD` | `50` | Number of /32 addresses in a /24 before aggregation into a network entry. |
+| `FETCH_TIMEOUT` | `20` | Timeout (seconds) when downloading external lists. |
+| `CACHE_TTL` | `600` | Cache duration (seconds) for compiled blocklists. |
 
 ---
 
@@ -180,3 +180,33 @@ add name=blocklist-refresh interval=1h on-event="/tool fetch url=https://blockli
 ```
 
 ---
+## Changelog
+
+### v0.9.1 (Unreleased)
+
+#### Added
+- Added environment variable `MIKROTIK_LIST_NAME` to define the default MikroTik address-list name. - Added safe MikroTik import format using:
+- Added safe MikroTik import format using:
+```rsc
+:do { add … } on-error={}
+```
+This prevents script failures due to duplicates.
+- Unified output format for `/custom.rsc`, `/all.rsc`, and `/mikrotik.rsc` (all now use the safe do-wrapper logic).
+- Added a single `/ip firewall address-list` header to reduce script size.
+- HTML UI now uses `MIKROTIK_LIST_NAME` as the placeholder for the address-list input field.
+
+#### Changed
+- Removed all `remove [find]` calls to avoid clearing existing lists on each update.
+- Improved `/24` aggregation logic for large feeds.
+- Improved handling of per-source comments.
+- Whitelist (`yaml` + on-URL) is now evaluated uniformly across all output types.
+
+#### Fixed
+- Resolved placeholder text mismatch in the HTML generator.
+- Corrected inconsistencies between the behavior of `/all.rsc` and `/custom.rsc`.
+- Stability improvements when processing very large blocklists.
+
+---
+
+### v0.9.0
+- Initial public version with YAML-based configuration, global whitelist, address-list compilation, `/custom.rsc`, `/all.rsc`, and a simple HTML UI.

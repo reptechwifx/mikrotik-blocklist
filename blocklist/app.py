@@ -281,6 +281,7 @@ def compile_custom_blocklist(
     explicit_nets24_comment: Dict[ipaddress.IPv4Network, str] = {}
     ip_first_comment: Dict[ipaddress.IPv4Address, str] = {}
 
+    # Collecte des IP depuis les sources
     for src in selected:
         url = src["url"]
         delim = src.get("delimiter") or "\n"
@@ -294,6 +295,7 @@ def compile_custom_blocklist(
         ips = extract_ipv4s_from_text(text, delim)
 
         if cidr_mode == "24":
+            # on agrège directement en /24 explicites
             for ip in ips:
                 if any(ip in net for net in wl_nets):
                     continue
@@ -302,6 +304,7 @@ def compile_custom_blocklist(
                     explicit_nets24.add(net)
                     explicit_nets24_comment[net] = source_comment
         else:
+            # mode /32 classique
             for ip in ips:
                 if any(ip in net for net in wl_nets):
                     continue
@@ -309,6 +312,7 @@ def compile_custom_blocklist(
                     all_ips.add(ip)
                     ip_first_comment.setdefault(ip, source_comment)
 
+    # Agrégation en /24 si >= AGGREGATE_THRESHOLD IP dans le /24
     per_net24: Dict[ipaddress.IPv4Network, Set[ipaddress.IPv4Address]] = defaultdict(set)
     for ip in all_ips:
         net24 = ipaddress.IPv4Network(f"{ip.exploded}/24", strict=False)
@@ -325,6 +329,7 @@ def compile_custom_blocklist(
             first_ip = next(iter(ips_set))
             aggregated_nets24_comment[net] = ip_first_comment.get(first_ip, GLOBAL_COMMENT)
 
+    # IP restantes (non agrégées et non couvertes par des /24 explicites)
     remaining_ips: Set[ipaddress.IPv4Address] = set()
     for ip in all_ips:
         ip_net24 = ipaddress.IPv4Network(f"{ip.exploded}/24", strict=False)
@@ -337,22 +342,25 @@ def compile_custom_blocklist(
     final_nets24: Set[ipaddress.IPv4Network] = set(explicit_nets24) | set(aggregated_nets24)
 
     lines: List[str] = []
-    lines.append("/ip firewall address-list")
-    lines.append(f'remove [find list="{list_name}"]')
 
+    # Un seul /ip firewall address-list en tête, pas de remove
+    lines.append("/ip firewall address-list")
+
+    # /24 d'abord
     for net in sorted(final_nets24, key=lambda n: (int(n.network_address), n.prefixlen)):
         if net in explicit_nets24_comment:
             comment = explicit_nets24_comment[net]
         else:
             comment = aggregated_nets24_comment.get(net, GLOBAL_COMMENT)
         lines.append(
-            f'add list={list_name} address={net.with_prefixlen} comment="{comment}" timeout={timeout}'
+            f':do {{ add list={list_name} address={net.with_prefixlen} comment="{comment}" timeout={timeout} }} on-error={{}}'
         )
 
+    # puis les /32 restants
     for ip in sorted(remaining_ips, key=int):
         comment = ip_first_comment.get(ip, GLOBAL_COMMENT)
         lines.append(
-            f'add list={list_name} address={ip.exploded} comment="{comment}" timeout={timeout}'
+            f':do {{ add list={list_name} address={ip.exploded} comment="{comment}" timeout={timeout} }} on-error={{}}'
         )
 
     return "\n".join(lines) + "\n"
@@ -408,9 +416,20 @@ def render_index_html() -> str:
     parts.append("<p>Select the sources you want to include, then generate your custom URL.</p>")
     parts.append('<section class="builder">')
     parts.append('<div class="builder-form">')
-    parts.append('<label>Address-list name (MikroTik): <input id="list-name" type="text" placeholder="blacklist"></label><br>')
-    parts.append('<label>Timeout (HH:MM:SS or Xd HH:MM:SS, max 3d): <input id="timeout" type="text" placeholder="02:00:00"></label><br>')
-    parts.append('<label>Whitelist CIDR (one per line):<br><textarea id="whitelist" rows="4" cols="40" placeholder="203.0.113.0/24\n198.51.100.0/23"></textarea></label>')
+    # placeholder basé sur MIKROTIK_LIST_NAME
+    parts.append(
+        f'<label>Address-list name (MikroTik): '
+        f'<input id="list-name" type="text" placeholder="{MIKROTIK_LIST_NAME}"></label><br>'
+    )
+    parts.append(
+        '<label>Timeout (HH:MM:SS or Xd HH:MM:SS, max 3d): '
+        '<input id="timeout" type="text" placeholder="02:00:00"></label><br>'
+    )
+    parts.append(
+        '<label>Whitelist CIDR (one per line):<br>'
+        '<textarea id="whitelist" rows="4" cols="40" '
+        'placeholder="203.0.113.0/24\n198.51.100.0/23"></textarea></label>'
+    )
     parts.append("</div>")
     parts.append('<div class="builder-sources">')
     parts.append("<h3>Sources</h3>")
@@ -432,7 +451,10 @@ def render_index_html() -> str:
 
     parts.append('<div class="builder-output">')
     parts.append('<h3>Generated URL</h3>')
-    parts.append('<input type="text" id="generated-url" readonly style="width:100%;" placeholder="Will appear here..." />')
+    parts.append(
+        '<input type="text" id="generated-url" readonly style="width:100%;" '
+        'placeholder="Will appear here..." />'
+    )
     parts.append('<button type="button" id="copy-url">Copy URL</button>')
     parts.append("</div>")
 
