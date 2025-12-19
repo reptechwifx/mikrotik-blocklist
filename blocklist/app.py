@@ -213,7 +213,7 @@ def normalize_list_name(raw: str | None) -> str:
 
 
 def parse_timeout(raw: str | None) -> str:
-    DEFAULT_TIMEOUT = "02:00:00"
+    DEFAULT_TIMEOUT = "06:00:00"
     MAX_SECONDS = 3 * 24 * 3600
 
     if raw is None or not raw.strip():
@@ -423,7 +423,7 @@ def render_index_html() -> str:
     )
     parts.append(
         '<label>Timeout (HH:MM:SS or Xd HH:MM:SS, max 3d): '
-        '<input id="timeout" type="text" placeholder="02:00:00"></label><br>'
+        '<input id="timeout" type="text" placeholder="06:00:00"></label><br>'
     )
     parts.append(
         '<label>Whitelist CIDR (one per line):<br>'

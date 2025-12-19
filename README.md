@@ -108,6 +108,8 @@ Run:
 docker run --rm   -p 8000:8000   -e BLOCKLIST_CONF_DIR=/app/conf   -v "$(pwd)/conf:/app/conf"   mikrotik-blocklist
 ```
 
+The container now starts uvicorn with `--proxy-headers --forwarded-allow-ips *` so access logs show the real client IP from `X-Forwarded-For`/`X-Real-IP`. Override the command if you want to restrict trusted proxy IPs (example: `--forwarded-allow-ips=10.0.0.1,10.0.0.2`).
+
 At first run, the container will seed configuration files.
 
 ---
@@ -157,7 +159,7 @@ Generates script including all active sources and YAML whitelist.
 Example:
 
 ```
-/custom.rsc?src=1&src=2&list=blacklist&timeout=02:00:00&wl=203.0.113.0/24
+/custom.rsc?src=1&src=2&list=blacklist&timeout=06:00:00&wl=203.0.113.0/24
 ```
 
 ### `/mikrotik.rsc`
@@ -182,17 +184,27 @@ add name=blocklist-refresh interval=1h on-event="/tool fetch url=https://blockli
 ---
 ## Changelog
 
-### v0.9.1 (Unreleased)
+### v0.9.2
 
 #### Added
-- Added environment variable `MIKROTIK_LIST_NAME` to define the default MikroTik address-list name. - Added safe MikroTik import format using:
-- Added safe MikroTik import format using:
+- Uvicorn now runs with `--proxy-headers --forwarded-allow-ips *` so logs show the real client IP from `X-Forwarded-For`/`X-Real-IP` when behind a reverse proxy.
+
+#### Changed
+- Default list timeout raised to `06:00:00` (backend default and UI placeholder).
+
+---
+
+### v0.9.1
+
+#### Added
+- Environment variable `MIKROTIK_LIST_NAME` to define the default MikroTik address-list name.
+- Safe MikroTik import format using:
 ```rsc
 :do { add … } on-error={}
 ```
 This prevents script failures due to duplicates.
 - Unified output format for `/custom.rsc`, `/all.rsc`, and `/mikrotik.rsc` (all now use the safe do-wrapper logic).
-- Added a single `/ip firewall address-list` header to reduce script size.
+- Single `/ip firewall address-list` header to reduce script size.
 - HTML UI now uses `MIKROTIK_LIST_NAME` as the placeholder for the address-list input field.
 
 #### Changed

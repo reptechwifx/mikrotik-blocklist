@@ -130,7 +130,7 @@ add action=drop chain=prerouting src-address-list=blacklist
     if (listName && listName !== "blacklist") {
       params.push("list=" + encodeURIComponent(listName));
     }
-    if (timeout && timeout !== "02:00:00") {
+    if (timeout && timeout !== "06:00:00") {
       params.push("timeout=" + encodeURIComponent(timeout));
     }
 
