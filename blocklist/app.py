@@ -165,8 +165,8 @@ def fetch_list(url: str) -> str:
         return ""
 
 
-def extract_ipv4s_from_text(text: str, delimiter: str | None) -> List[ipaddress.IPv4Address]:
-    ips: List[ipaddress.IPv4Address] = []
+def extract_ipv4s_from_text(text: str, delimiter: str , cidr_mode: str| None) -> List[ipaddress.IPv4Network]:
+    nets: List[ipaddress.IPv4Network] = []
     if not delimiter:
         delimiter = "\n"
 
@@ -185,19 +185,22 @@ def extract_ipv4s_from_text(text: str, delimiter: str | None) -> List[ipaddress.
 
         try:
             ip = ipaddress.IPv4Address(token)
-            ips.append(ip)
+            if cidr_mode == "24":
+            	nets.append(ipaddress.ip_network(f"{ip}/24"))
+            else:
+            	nets.append(ipaddress.ip_network(f"{ip}/32"))
             continue
         except ValueError:
             pass
 
         try:
-            iface = ipaddress.IPv4Interface(token)
-            ips.append(iface.ip)
+            net = ipaddress.IPv4Network(token)
+            nets.append(net)
             continue
         except ValueError:
             pass
 
-    return ips
+    return nets
 
 
 def normalize_list_name(raw: str | None) -> str:
@@ -276,10 +279,10 @@ def compile_custom_blocklist(
 
     wl_nets = whitelist_nets or []
 
-    all_ips: Set[ipaddress.IPv4Address] = set()
+    all_nets: Set[ipaddress.IPv4Network] = set()
     explicit_nets24: Set[ipaddress.IPv4Network] = set()
     explicit_nets24_comment: Dict[ipaddress.IPv4Network, str] = {}
-    ip_first_comment: Dict[ipaddress.IPv4Address, str] = {}
+    net_first_comment: Dict[ipaddress.IPv4Network, str] = {}
 
     # Collecte des IP depuis les sources
     for src in selected:
@@ -292,54 +295,14 @@ def compile_custom_blocklist(
         if not text:
             continue
 
-        ips = extract_ipv4s_from_text(text, delim)
+        nets = extract_ipv4s_from_text(text, delim, cidr_mode)
 
-        if cidr_mode == "24":
-            # on agrège directement en /24 explicites
-            for ip in ips:
-                if any(ip in net for net in wl_nets):
+        for net in nets:
+            if any(net.overlaps(wlnet) for wlnet in wl_nets):
                     continue
-                net = ipaddress.IPv4Network(f"{ip.exploded}/24", strict=False)
-                if net not in explicit_nets24:
-                    explicit_nets24.add(net)
-                    explicit_nets24_comment[net] = source_comment
-        else:
-            # mode /32 classique
-            for ip in ips:
-                if any(ip in net for net in wl_nets):
-                    continue
-                if ip not in all_ips:
-                    all_ips.add(ip)
-                    ip_first_comment.setdefault(ip, source_comment)
-
-    # Agrégation en /24 si >= AGGREGATE_THRESHOLD IP dans le /24
-    per_net24: Dict[ipaddress.IPv4Network, Set[ipaddress.IPv4Address]] = defaultdict(set)
-    for ip in all_ips:
-        net24 = ipaddress.IPv4Network(f"{ip.exploded}/24", strict=False)
-        per_net24[net24].add(ip)
-
-    aggregated_nets24: Set[ipaddress.IPv4Network] = set()
-    aggregated_ips: Set[ipaddress.IPv4Address] = set()
-    aggregated_nets24_comment: Dict[ipaddress.IPv4Network, str] = {}
-
-    for net, ips_set in per_net24.items():
-        if len(ips_set) >= AGGREGATE_THRESHOLD:
-            aggregated_nets24.add(net)
-            aggregated_ips.update(ips_set)
-            first_ip = next(iter(ips_set))
-            aggregated_nets24_comment[net] = ip_first_comment.get(first_ip, GLOBAL_COMMENT)
-
-    # IP restantes (non agrégées et non couvertes par des /24 explicites)
-    remaining_ips: Set[ipaddress.IPv4Address] = set()
-    for ip in all_ips:
-        ip_net24 = ipaddress.IPv4Network(f"{ip.exploded}/24", strict=False)
-        if ip_net24 in explicit_nets24:
-            continue
-        if ip_net24 in aggregated_nets24:
-            continue
-        remaining_ips.add(ip)
-
-    final_nets24: Set[ipaddress.IPv4Network] = set(explicit_nets24) | set(aggregated_nets24)
+            if net not in all_nets:
+                all_nets.add(net)
+                net_first_comment.setdefault(net, source_comment)
 
     lines: List[str] = []
 
@@ -347,20 +310,9 @@ def compile_custom_blocklist(
     lines.append("/ip firewall address-list")
 
     # /24 d'abord
-    for net in sorted(final_nets24, key=lambda n: (int(n.network_address), n.prefixlen)):
-        if net in explicit_nets24_comment:
-            comment = explicit_nets24_comment[net]
-        else:
-            comment = aggregated_nets24_comment.get(net, GLOBAL_COMMENT)
+    for net in sorted(all_nets, key=lambda n: (int(n.network_address), n.prefixlen)):
         lines.append(
-            f':do {{ add list={list_name} address={net.with_prefixlen} comment="{comment}" timeout={timeout} }} on-error={{}}'
-        )
-
-    # puis les /32 restants
-    for ip in sorted(remaining_ips, key=int):
-        comment = ip_first_comment.get(ip, GLOBAL_COMMENT)
-        lines.append(
-            f':do {{ add list={list_name} address={ip.exploded} comment="{comment}" timeout={timeout} }} on-error={{}}'
+            f':do {{ add list={list_name} address={net.with_prefixlen} comment="{net_first_comment.get(net, GLOBAL_COMMENT)}" timeout={timeout} }} on-error={{}}'
         )
 
     return "\n".join(lines) + "\n"

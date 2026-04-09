@@ -16,3 +16,13 @@ sources:
     cidr_mode: "auto"
     timeout_hours: 2
     comment: "BlockList.de"
+
+  - id: 3
+    name: "IPDeny CN"
+    url: "https://www.ipdeny.com/ipblocks/data/aggregated/cn-aggregated.zone"
+    is_active: true
+    delimiter: "\n"
+    cidr_mode: "auto"
+    timeout_hours: 2
+    comment: "IPDeny CN"
+
