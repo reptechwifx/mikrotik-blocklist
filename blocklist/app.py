@@ -78,7 +78,7 @@ def load_sources_from_yaml() -> List[dict]:
 
         is_active = _normalize_bool(src.get("is_active", True))
         delimiter = src.get("delimiter", "\n")
-        cidr_mode = src.get("cidr_mode", "32")
+        cidr_netmask = src.get("cidr_netmask", "32")
         timeout_hours = int(src.get("timeout_hours", 2))
         comment = (src.get("comment") or name or GLOBAL_COMMENT).strip() or GLOBAL_COMMENT
 
@@ -89,7 +89,7 @@ def load_sources_from_yaml() -> List[dict]:
                 "url": url,
                 "is_active": is_active,
                 "delimiter": delimiter,
-                "cidr_mode": cidr_mode,
+                "cidr_netmask": cidr_netmask,
                 "timeout_hours": timeout_hours,
                 "comment": comment,
             }
@@ -165,7 +165,7 @@ def fetch_list(url: str) -> str:
         return ""
 
 
-def extract_ipv4s_from_text(text: str, delimiter: str , cidr_mode: str| None) -> List[ipaddress.IPv4Network]:
+def extract_ipv4s_from_text(text: str, delimiter: str , cidr_netmask: str| None) -> List[ipaddress.IPv4Network]:
     nets: List[ipaddress.IPv4Network] = []
     if not delimiter:
         delimiter = "\n"
@@ -185,10 +185,14 @@ def extract_ipv4s_from_text(text: str, delimiter: str , cidr_mode: str| None) ->
 
         try:
             ip = ipaddress.IPv4Address(token)
-            if cidr_mode == "24":
-            	nets.append(ipaddress.ip_network(f"{ip}/24"))
-            else:
-            	nets.append(ipaddress.ip_network(f"{ip}/32"))
+            # Use cidr_netmask as netmask (e.g., "24", "16", "32")
+            # Default to "32" if cidr_netmask is "auto" or invalid
+            netmask = cidr_netmask if cidr_netmask and cidr_netmask != "auto" else "32"
+            try:
+                nets.append(ipaddress.ip_network(f"{ip}/{netmask}", strict=False))
+            except ValueError:
+                # If netmask is invalid, default to /32
+                nets.append(ipaddress.ip_network(f"{ip}/32"))
             continue
         except ValueError:
             pass
@@ -288,14 +292,14 @@ def compile_custom_blocklist(
     for src in selected:
         url = src["url"]
         delim = src.get("delimiter") or "\n"
-        cidr_mode = src.get("cidr_mode") or "32"
+        cidr_netmask = src.get("cidr_netmask") or "32"
         source_comment = (src.get("name") or src.get("comment") or GLOBAL_COMMENT).strip() or GLOBAL_COMMENT
 
         text = fetch_list(url)
         if not text:
             continue
 
-        nets = extract_ipv4s_from_text(text, delim, cidr_mode)
+        nets = extract_ipv4s_from_text(text, delim, cidr_netmask)
 
         for net in nets:
             if any(net.overlaps(wlnet) for wlnet in wl_nets):

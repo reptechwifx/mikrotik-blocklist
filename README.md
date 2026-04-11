@@ -49,7 +49,7 @@ sources:
     url: "https://www.dshield.org/block.txt"
     is_active: true
     delimiter: "\t"
-    cidr_mode: "24"
+    cidr_netmask: "24"
     timeout_hours: 2
     comment: "DShield"
 
@@ -58,7 +58,7 @@ sources:
     url: "https://lists.blocklist.de/lists/all.txt"
     is_active: true
     delimiter: "\n"
-    cidr_mode: "auto"
+    cidr_netmask: "auto"
     timeout_hours: 2
     comment: "BlockList.de"
 ```
