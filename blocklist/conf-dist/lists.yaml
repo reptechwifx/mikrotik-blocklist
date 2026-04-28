@@ -18,11 +18,11 @@ sources:
     comment: "BlockList.de"
 
   - id: 3
-    name: "IPDeny CN"
-    url: "https://www.ipdeny.com/ipblocks/data/aggregated/cn-aggregated.zone"
+    name: "Firehol"
+    url: "https://iplists.firehol.org/files/firehol_level1.netset"
     is_active: true
     delimiter: "\n"
     cidr_mode: "auto"
     timeout_hours: 2
-    comment: "IPDeny CN"
+    comment: "Firehol"
 
